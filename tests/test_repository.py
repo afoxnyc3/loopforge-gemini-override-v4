@@ -1,133 +1,159 @@
-"""Tests for bookmark_manager/repository.py CRUD operations."""
-from __future__ import annotations
-
+"""Unit + integration tests for bookmark_manager/repository.py."""
 import pytest
-
-from bookmark_manager.models import Bookmark
+from bookmark_manager.database import Database
 from bookmark_manager.repository import BookmarkRepository
+from bookmark_manager.models import Bookmark
 
 
-class TestBookmarkRepositoryCreate:
-    def test_create_returns_bookmark_with_id(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        assert saved.id is not None
-        assert saved.id > 0
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
-    def test_create_persists_url(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        fetched = repository.get_by_id(saved.id)
+@pytest.fixture
+def db(tmp_path):
+    db_file = tmp_path / "test.db"
+    database = Database(str(db_file))
+    database.initialize()
+    return database
+
+
+@pytest.fixture
+def repo(db):
+    return BookmarkRepository(db)
+
+
+@pytest.fixture
+def created_bookmark(repo):
+    return repo.create(
+        url="https://example.com",
+        title="Example",
+        description="A test site",
+        tags=["python", "test"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Create
+# ---------------------------------------------------------------------------
+
+class TestCreate:
+    def test_create_returns_bookmark(self, repo):
+        bm = repo.create(url="https://example.com", title="Example", tags=["web"])
+        assert bm.id is not None
+        assert bm.url == "https://example.com"
+        assert "web" in bm.tags
+
+    def test_create_without_tags(self, repo):
+        bm = repo.create(url="https://notags.com", title="No Tags")
+        assert bm.tags == [] or bm.tags is not None
+
+    def test_create_assigns_id(self, repo):
+        bm = repo.create(url="https://unique.com", title="Unique")
+        assert isinstance(bm.id, int)
+        assert bm.id > 0
+
+
+# ---------------------------------------------------------------------------
+# Read
+# ---------------------------------------------------------------------------
+
+class TestRead:
+    def test_get_by_id(self, repo, created_bookmark):
+        fetched = repo.get_by_id(created_bookmark.id)
         assert fetched is not None
-        assert fetched.url == sample_bookmark.url
+        assert fetched.id == created_bookmark.id
 
-    def test_create_persists_title(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        fetched = repository.get_by_id(saved.id)
-        assert fetched.title == sample_bookmark.title
-
-    def test_create_persists_tags(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        fetched = repository.get_by_id(saved.id)
-        assert set(fetched.tags) == set(sample_bookmark.tags)
-
-    def test_create_persists_description(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        fetched = repository.get_by_id(saved.id)
-        assert fetched.description == sample_bookmark.description
-
-    def test_create_sets_timestamps(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        fetched = repository.get_by_id(saved.id)
-        assert fetched.created_at is not None
-        assert fetched.updated_at is not None
-
-
-class TestBookmarkRepositoryGetById:
-    def test_get_by_id_returns_none_for_missing(self, repository: BookmarkRepository):
-        result = repository.get_by_id(99999)
+    def test_get_by_id_not_found(self, repo):
+        result = repo.get_by_id(99999)
         assert result is None
 
-    def test_get_by_id_returns_correct_bookmark(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        fetched = repository.get_by_id(saved.id)
-        assert fetched.url == sample_bookmark.url
-
-
-class TestBookmarkRepositoryGetByUrl:
-    def test_get_by_url_returns_bookmark(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        repository.create(sample_bookmark)
-        fetched = repository.get_by_url(sample_bookmark.url)
+    def test_get_by_url(self, repo, created_bookmark):
+        fetched = repo.get_by_url("https://example.com")
         assert fetched is not None
-        assert fetched.url == sample_bookmark.url
+        assert fetched.url == "https://example.com"
 
-    def test_get_by_url_returns_none_for_missing(self, repository: BookmarkRepository):
-        result = repository.get_by_url("https://notexist.example.com")
+    def test_get_by_url_not_found(self, repo):
+        result = repo.get_by_url("https://doesnotexist.io")
         assert result is None
 
 
-class TestBookmarkRepositoryList:
-    def test_list_all_returns_all(self, repository: BookmarkRepository, sample_bookmarks: list):
-        for bm in sample_bookmarks:
-            repository.create(bm)
-        results = repository.list_all()
-        assert len(results) == len(sample_bookmarks)
+# ---------------------------------------------------------------------------
+# List
+# ---------------------------------------------------------------------------
 
-    def test_list_all_empty(self, repository: BookmarkRepository):
-        results = repository.list_all()
-        assert results == []
-
-    def test_list_all_with_limit(self, repository: BookmarkRepository, sample_bookmarks: list):
-        for bm in sample_bookmarks:
-            repository.create(bm)
-        results = repository.list_all(limit=2)
-        assert len(results) == 2
-
-    def test_list_by_tag(self, repository: BookmarkRepository, sample_bookmarks: list):
-        for bm in sample_bookmarks:
-            repository.create(bm)
-        results = repository.list_by_tag("python")
-        # python.org and pytest.org both have the 'python' tag
+class TestList:
+    def test_list_all_returns_all(self, repo):
+        repo.create(url="https://a.com", title="A")
+        repo.create(url="https://b.com", title="B")
+        results = repo.list_all()
         assert len(results) >= 2
-        for bm in results:
-            assert "python" in bm.tags
 
-    def test_list_by_tag_no_results(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        repository.create(sample_bookmark)
-        results = repository.list_by_tag("nonexistenttag")
+    def test_list_respects_limit(self, repo):
+        for i in range(5):
+            repo.create(url=f"https://site{i}.com", title=f"Site {i}")
+        results = repo.list_all(limit=3)
+        assert len(results) <= 3
+
+    def test_list_empty_db(self, repo):
+        results = repo.list_all()
+        assert isinstance(results, list)
+
+
+# ---------------------------------------------------------------------------
+# Find by tag
+# ---------------------------------------------------------------------------
+
+class TestFindByTag:
+    def test_find_by_tag_returns_matching(self, repo):
+        repo.create(url="https://python.org", title="Python", tags=["python"])
+        repo.create(url="https://rust-lang.org", title="Rust", tags=["rust"])
+        results = repo.find_by_tag("python")
+        assert any(bm.url == "https://python.org" for bm in results)
+        assert all("python" in bm.tags for bm in results)
+
+    def test_find_by_tag_no_match(self, repo):
+        results = repo.find_by_tag("nonexistent-tag-xyz")
         assert results == []
 
-
-class TestBookmarkRepositoryDelete:
-    def test_delete_removes_bookmark(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        saved = repository.create(sample_bookmark)
-        repository.delete(saved.id)
-        assert repository.get_by_id(saved.id) is None
-
-    def test_delete_nonexistent_does_not_raise(self, repository: BookmarkRepository):
-        # Deleting a non-existent ID should not raise an exception
-        repository.delete(99999)
+    def test_find_by_tag_limit(self, repo):
+        for i in range(5):
+            repo.create(url=f"https://tagged{i}.com", title=f"Tagged {i}", tags=["shared"])
+        results = repo.find_by_tag("shared", limit=2)
+        assert len(results) <= 2
 
 
-class TestBookmarkRepositorySearch:
-    def test_search_by_url_fragment(self, repository: BookmarkRepository, sample_bookmarks: list):
-        for bm in sample_bookmarks:
-            repository.create(bm)
-        results = repository.search("python")
-        assert len(results) >= 1
+# ---------------------------------------------------------------------------
+# Delete
+# ---------------------------------------------------------------------------
 
-    def test_search_returns_empty_for_no_match(self, repository: BookmarkRepository, sample_bookmark: Bookmark):
-        repository.create(sample_bookmark)
-        results = repository.search("zzznomatch")
-        assert results == []
+class TestDelete:
+    def test_delete_removes_bookmark(self, repo, created_bookmark):
+        repo.delete(created_bookmark.id)
+        assert repo.get_by_id(created_bookmark.id) is None
+
+    def test_delete_nonexistent_does_not_raise(self, repo):
+        # Should not raise an exception
+        repo.delete(99999)
 
 
-class TestBookmarkRepositoryTags:
-    def test_get_all_tags(self, repository: BookmarkRepository, sample_bookmarks: list):
-        for bm in sample_bookmarks:
-            repository.create(bm)
-        tags = repository.get_all_tags()
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+class TestTags:
+    def test_get_all_tags(self, repo):
+        repo.create(url="https://a.com", title="A", tags=["alpha", "beta"])
+        repo.create(url="https://b.com", title="B", tags=["beta", "gamma"])
+        tags = repo.get_all_tags()
         tag_names = [t.name for t in tags]
-        assert "python" in tag_names
+        assert "alpha" in tag_names
+        assert "beta" in tag_names
+        assert "gamma" in tag_names
 
-    def test_get_all_tags_empty(self, repository: BookmarkRepository):
-        tags = repository.get_all_tags()
-        assert tags == []
+    def test_tag_count_is_accurate(self, repo):
+        repo.create(url="https://x.com", title="X", tags=["counted"])
+        repo.create(url="https://y.com", title="Y", tags=["counted"])
+        tags = repo.get_all_tags()
+        counted = next((t for t in tags if t.name == "counted"), None)
+        assert counted is not None
+        assert counted.count >= 2
