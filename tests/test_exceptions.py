@@ -1,86 +1,77 @@
-"""Tests for bookmark_manager/exceptions.py."""
+"""Tests for bookmark_manager/exceptions.py custom exception hierarchy."""
+from __future__ import annotations
 
 import pytest
 
 from bookmark_manager.exceptions import (
-    BookmarkError,
+    BookmarkManagerError,
     BookmarkNotFoundError,
-    DatabaseError,
     DuplicateBookmarkError,
-    ImportError as BMImportError,
     InvalidURLError,
-    TagError,
+    DatabaseError,
+    ImportError as BMImportError,
+    ExportError,
 )
 
 
 class TestExceptionHierarchy:
-    def test_bookmark_error_is_base_exception(self):
-        assert issubclass(BookmarkError, Exception)
+    def test_bookmark_not_found_is_bookmark_manager_error(self):
+        assert issubclass(BookmarkNotFoundError, BookmarkManagerError)
 
-    def test_bookmark_not_found_inherits_bookmark_error(self):
-        assert issubclass(BookmarkNotFoundError, BookmarkError)
+    def test_duplicate_bookmark_is_bookmark_manager_error(self):
+        assert issubclass(DuplicateBookmarkError, BookmarkManagerError)
 
-    def test_duplicate_bookmark_inherits_bookmark_error(self):
-        assert issubclass(DuplicateBookmarkError, BookmarkError)
+    def test_invalid_url_is_bookmark_manager_error(self):
+        assert issubclass(InvalidURLError, BookmarkManagerError)
 
-    def test_invalid_url_inherits_bookmark_error(self):
-        assert issubclass(InvalidURLError, BookmarkError)
+    def test_database_error_is_bookmark_manager_error(self):
+        assert issubclass(DatabaseError, BookmarkManagerError)
 
-    def test_database_error_inherits_bookmark_error(self):
-        assert issubclass(DatabaseError, BookmarkError)
+    def test_import_error_is_bookmark_manager_error(self):
+        assert issubclass(BMImportError, BookmarkManagerError)
 
-    def test_tag_error_inherits_bookmark_error(self):
-        assert issubclass(TagError, BookmarkError)
+    def test_export_error_is_bookmark_manager_error(self):
+        assert issubclass(ExportError, BookmarkManagerError)
 
-    def test_import_error_inherits_bookmark_error(self):
-        assert issubclass(BMImportError, BookmarkError)
+    def test_bookmark_manager_error_is_exception(self):
+        assert issubclass(BookmarkManagerError, Exception)
 
 
-class TestExceptionMessages:
-    def test_bookmark_not_found_message(self):
-        exc = BookmarkNotFoundError(42)
+class TestExceptionInstantiation:
+    def test_bookmark_not_found_with_id(self):
+        exc = BookmarkNotFoundError(bookmark_id=42)
         assert "42" in str(exc)
 
-    def test_duplicate_bookmark_message(self):
-        url = "https://example.com"
-        exc = DuplicateBookmarkError(url)
-        assert url in str(exc)
+    def test_duplicate_bookmark_with_url(self):
+        exc = DuplicateBookmarkError(url="https://example.com")
+        assert "example.com" in str(exc)
 
-    def test_invalid_url_message(self):
-        url = "not-a-url"
-        exc = InvalidURLError(url)
-        assert url in str(exc)
+    def test_invalid_url_with_url(self):
+        exc = InvalidURLError(url="not-a-url")
+        assert "not-a-url" in str(exc)
 
-    def test_database_error_message(self):
+    def test_database_error_with_message(self):
         exc = DatabaseError("connection failed")
         assert "connection failed" in str(exc)
 
-    def test_tag_error_message(self):
-        exc = TagError("invalid tag")
-        assert "invalid tag" in str(exc)
+    def test_export_error_with_message(self):
+        exc = ExportError("write failed")
+        assert "write failed" in str(exc)
 
 
 class TestExceptionRaising:
     def test_raise_bookmark_not_found(self):
         with pytest.raises(BookmarkNotFoundError):
-            raise BookmarkNotFoundError(99)
+            raise BookmarkNotFoundError(bookmark_id=1)
 
     def test_raise_duplicate_bookmark(self):
         with pytest.raises(DuplicateBookmarkError):
-            raise DuplicateBookmarkError("https://dup.com")
+            raise DuplicateBookmarkError(url="https://example.com")
 
     def test_raise_invalid_url(self):
         with pytest.raises(InvalidURLError):
-            raise InvalidURLError("bad-url")
+            raise InvalidURLError(url="bad")
 
-    def test_catch_as_bookmark_error(self):
-        """All custom exceptions should be catchable as BookmarkError."""
-        for exc_class, args in [
-            (BookmarkNotFoundError, (1,)),
-            (DuplicateBookmarkError, ("https://x.com",)),
-            (InvalidURLError, ("bad",)),
-            (DatabaseError, ("err",)),
-            (TagError, ("err",)),
-        ]:
-            with pytest.raises(BookmarkError):
-                raise exc_class(*args)
+    def test_catch_as_base_class(self):
+        with pytest.raises(BookmarkManagerError):
+            raise BookmarkNotFoundError(bookmark_id=99)

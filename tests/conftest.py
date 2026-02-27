@@ -1,9 +1,10 @@
 """Shared pytest fixtures for the CLI Bookmark Manager test suite."""
+from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Generator
 
 import pytest
 from click.testing import CliRunner
@@ -15,67 +16,95 @@ from bookmark_manager.service import BookmarkService
 
 
 @pytest.fixture
-def tmp_db_path(tmp_path: Path) -> str:
+def tmp_db_path(tmp_path: Path) -> Path:
     """Return a path to a temporary SQLite database file."""
-    return str(tmp_path / "test_bookmarks.db")
+    return tmp_path / "test_bookmarks.db"
 
 
 @pytest.fixture
-def db(tmp_db_path: str) -> Generator[Database, None, None]:
-    """Provide an initialised Database instance backed by a temp file."""
-    database = Database(tmp_db_path)
+def db(tmp_db_path: Path) -> Database:
+    """Create and return an initialised Database instance backed by a temp file."""
+    database = Database(str(tmp_db_path))
     database.initialize()
-    yield database
-    database.close()
+    return database
 
 
 @pytest.fixture
-def repo(db: Database) -> BookmarkRepository:
-    """Provide a BookmarkRepository wired to the temp database."""
+def repository(db: Database) -> BookmarkRepository:
+    """Return a BookmarkRepository wired to the temp database."""
     return BookmarkRepository(db)
 
 
 @pytest.fixture
-def service(repo: BookmarkRepository) -> BookmarkService:
-    """Provide a BookmarkService wired to the temp repository."""
-    return BookmarkService(repo)
-
-
-@pytest.fixture
-def runner() -> CliRunner:
-    """Provide a Click test runner that mixes stdout/stderr."""
-    return CliRunner(mix_stderr=False)
+def service(repository: BookmarkRepository) -> BookmarkService:
+    """Return a BookmarkService wired to the temp repository."""
+    return BookmarkService(repository)
 
 
 @pytest.fixture
 def sample_bookmark() -> Bookmark:
-    """Return a detached Bookmark object (no DB id)."""
+    """Return a single sample Bookmark object (not yet persisted)."""
     return Bookmark(
         id=None,
         url="https://example.com",
-        title="Example Domain",
-        description="An example bookmark",
-        tags=["example", "test"],
+        title="Example Site",
+        description="A sample bookmark for testing",
+        tags=["python", "testing"],
         created_at=None,
         updated_at=None,
     )
 
 
 @pytest.fixture
-def persisted_bookmark(repo: BookmarkRepository) -> Bookmark:
-    """Insert a bookmark and return the persisted instance."""
-    return repo.create(
-        url="https://example.com",
-        title="Example Domain",
-        description="An example bookmark",
-        tags=["example", "test"],
-    )
+def sample_bookmarks() -> list[Bookmark]:
+    """Return a list of sample Bookmark objects (not yet persisted)."""
+    return [
+        Bookmark(
+            id=None,
+            url="https://python.org",
+            title="Python",
+            description="The Python programming language",
+            tags=["python", "programming"],
+            created_at=None,
+            updated_at=None,
+        ),
+        Bookmark(
+            id=None,
+            url="https://pytest.org",
+            title="pytest",
+            description="Testing framework",
+            tags=["python", "testing"],
+            created_at=None,
+            updated_at=None,
+        ),
+        Bookmark(
+            id=None,
+            url="https://github.com",
+            title="GitHub",
+            description="Code hosting",
+            tags=["git", "hosting"],
+            created_at=None,
+            updated_at=None,
+        ),
+    ]
 
 
 @pytest.fixture
-def sample_html_file(tmp_path: Path) -> str:
-    """Write a minimal Netscape bookmark HTML file and return its path."""
-    content = """<!DOCTYPE NETSCAPE-Bookmark-file-1>
+def runner() -> CliRunner:
+    """Return a Click CliRunner instance."""
+    return CliRunner()
+
+
+@pytest.fixture
+def cli_env(tmp_db_path: Path) -> dict[str, str]:
+    """Environment variables pointing the CLI at the temp database."""
+    return {"BOOKMARK_DB_PATH": str(tmp_db_path)}
+
+
+@pytest.fixture
+def sample_html() -> str:
+    """Return a minimal Netscape bookmark HTML string for parser tests."""
+    return """<!DOCTYPE NETSCAPE-Bookmark-file-1>
 <!-- This is an automatically generated file.
      It will be read and overwritten.
      DO NOT EDIT! -->
@@ -85,10 +114,8 @@ def sample_html_file(tmp_path: Path) -> str:
 <DL><p>
     <DT><A HREF="https://python.org" ADD_DATE="1609459200" TAGS="python,programming">Python</A>
     <DD>The Python programming language
-    <DT><A HREF="https://github.com" ADD_DATE="1609459201" TAGS="git,dev">GitHub</A>
-    <DT><A HREF="https://docs.python.org" ADD_DATE="1609459202">Python Docs</A>
+    <DT><A HREF="https://pytest.org" ADD_DATE="1609459200" TAGS="python,testing">pytest</A>
+    <DD>Testing framework
+    <DT><A HREF="https://github.com" ADD_DATE="1609459200">GitHub</A>
 </DL><p>
 """
-    filepath = tmp_path / "bookmarks.html"
-    filepath.write_text(content, encoding="utf-8")
-    return str(filepath)

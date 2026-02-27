@@ -1,129 +1,129 @@
-"""Tests for bookmark_manager/service.py."""
+"""Tests for bookmark_manager/service.py business logic."""
+from __future__ import annotations
 
 import pytest
 
-from bookmark_manager.exceptions import (
-    BookmarkNotFoundError,
-    DuplicateBookmarkError,
-    InvalidURLError,
-)
+from bookmark_manager.exceptions import BookmarkNotFoundError, DuplicateBookmarkError, InvalidURLError
 from bookmark_manager.models import Bookmark
 from bookmark_manager.service import BookmarkService
 
 
-class TestAddBookmark:
-    def test_add_valid_url(self, service: BookmarkService):
-        b = service.add(url="https://example.com", title="Example", tags=[])
-        assert isinstance(b, Bookmark)
-        assert b.id is not None
+class TestServiceAddBookmark:
+    def test_add_valid_bookmark(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example")
+        assert bm.id is not None
+        assert bm.url == "https://example.com"
 
-    def test_add_normalizes_url_scheme(self, service: BookmarkService):
-        """URLs without scheme should get https:// prepended."""
-        b = service.add(url="example.com", title="", tags=[])
-        assert b.url.startswith("http")
+    def test_add_bookmark_normalizes_url_scheme(self, service: BookmarkService):
+        """URLs missing scheme should get https:// prepended."""
+        bm = service.add_bookmark(url="example.com", title="Example")
+        assert bm.url.startswith("http")
 
-    def test_add_normalizes_tags_to_lowercase(self, service: BookmarkService):
-        b = service.add(url="https://example.com", title="", tags=["Python", "DEV"])
-        assert "python" in b.tags
-        assert "dev" in b.tags
+    def test_add_bookmark_with_tags(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example",
+                                   tags=["python", "web"])
+        assert "python" in bm.tags
+        assert "web" in bm.tags
 
-    def test_add_deduplicates_tags(self, service: BookmarkService):
-        b = service.add(url="https://example.com", title="", tags=["python", "python", "Python"])
-        assert b.tags.count("python") == 1
+    def test_add_bookmark_normalizes_tags_lowercase(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example",
+                                   tags=["Python", "WEB"])
+        assert "python" in bm.tags
+        assert "web" in bm.tags
 
-    def test_add_strips_tag_whitespace(self, service: BookmarkService):
-        b = service.add(url="https://example.com", title="", tags=[" python ", "dev "])
-        assert "python" in b.tags
-        assert "dev" in b.tags
+    def test_add_bookmark_deduplicates_tags(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example",
+                                   tags=["python", "python", "Python"])
+        assert bm.tags.count("python") == 1
+
+    def test_add_bookmark_strips_tag_whitespace(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example",
+                                   tags=["  python  ", " web "])
+        assert "python" in bm.tags
+        assert "web" in bm.tags
+
+    def test_add_duplicate_url_raises(self, service: BookmarkService):
+        service.add_bookmark(url="https://example.com", title="Example")
+        with pytest.raises(DuplicateBookmarkError):
+            service.add_bookmark(url="https://example.com", title="Example 2")
 
     def test_add_invalid_url_raises(self, service: BookmarkService):
         with pytest.raises(InvalidURLError):
-            service.add(url="not a url at all !!!", title="", tags=[])
+            service.add_bookmark(url="not-a-url-at-all!!!", title="Bad")
 
-    def test_add_duplicate_url_raises(self, service: BookmarkService):
-        service.add(url="https://example.com", title="First", tags=[])
-        with pytest.raises((DuplicateBookmarkError, Exception)):
-            service.add(url="https://example.com", title="Second", tags=[])
-
-    def test_add_with_description(self, service: BookmarkService):
-        b = service.add(url="https://example.com", title="", tags=[], description="A description")
-        assert b.description == "A description"
+    def test_add_bookmark_with_description(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example",
+                                   description="A test bookmark")
+        assert bm.description == "A test bookmark"
 
 
-class TestGetBookmark:
+class TestServiceGetBookmark:
     def test_get_existing_bookmark(self, service: BookmarkService):
-        created = service.add(url="https://example.com", title="Example", tags=[])
-        fetched = service.get(created.id)
-        assert fetched.id == created.id
-        assert fetched.url == created.url
+        created = service.add_bookmark(url="https://example.com", title="Example")
+        fetched = service.get_bookmark(created.id)
+        assert fetched.url == "https://example.com"
 
     def test_get_nonexistent_raises(self, service: BookmarkService):
         with pytest.raises(BookmarkNotFoundError):
-            service.get(99999)
+            service.get_bookmark(99999)
 
 
-class TestListBookmarks:
-    def test_list_all_empty(self, service: BookmarkService):
-        results = service.list_all()
-        assert results == []
-
-    def test_list_all_returns_bookmarks(self, service: BookmarkService):
-        service.add(url="https://a.com", title="A", tags=[])
-        service.add(url="https://b.com", title="B", tags=[])
-        results = service.list_all()
-        assert len(results) == 2
-
-    def test_list_by_tag(self, service: BookmarkService):
-        service.add(url="https://python.org", title="Python", tags=["python"])
-        service.add(url="https://java.com", title="Java", tags=["java"])
-        results = service.list_by_tag("python")
-        assert len(results) == 1
-        assert results[0].url == "https://python.org"
-
-    def test_list_with_limit(self, service: BookmarkService):
-        for i in range(5):
-            service.add(url=f"https://site{i}.com", title=f"Site {i}", tags=[])
-        results = service.list_all(limit=2)
-        assert len(results) <= 2
-
-
-class TestSearchBookmarks:
-    def test_search_finds_by_url(self, service: BookmarkService):
-        service.add(url="https://python.org", title="Python", tags=[])
-        results = service.search("python.org")
-        assert len(results) >= 1
-
-    def test_search_finds_by_title(self, service: BookmarkService):
-        service.add(url="https://example.com", title="My Awesome Guide", tags=[])
-        results = service.search("Awesome Guide")
-        assert len(results) >= 1
-
-    def test_search_no_results(self, service: BookmarkService):
-        results = service.search("zzznomatchzzz")
-        assert results == []
-
-
-class TestDeleteBookmark:
-    def test_delete_existing(self, service: BookmarkService):
-        b = service.add(url="https://example.com", title="", tags=[])
-        service.delete(b.id)
+class TestServiceDeleteBookmark:
+    def test_delete_existing_bookmark(self, service: BookmarkService):
+        bm = service.add_bookmark(url="https://example.com", title="Example")
+        service.delete_bookmark(bm.id)  # should not raise
         with pytest.raises(BookmarkNotFoundError):
-            service.get(b.id)
+            service.get_bookmark(bm.id)
 
     def test_delete_nonexistent_raises(self, service: BookmarkService):
         with pytest.raises(BookmarkNotFoundError):
-            service.delete(99999)
+            service.delete_bookmark(99999)
 
 
-class TestListTags:
-    def test_list_tags_empty(self, service: BookmarkService):
-        tags = service.list_tags()
+class TestServiceListBookmarks:
+    def test_list_all_empty(self, service: BookmarkService):
+        results = service.list_bookmarks()
+        assert results == []
+
+    def test_list_all_returns_added(self, service: BookmarkService):
+        service.add_bookmark(url="https://example.com", title="Example")
+        service.add_bookmark(url="https://python.org", title="Python")
+        results = service.list_bookmarks()
+        assert len(results) == 2
+
+    def test_list_by_tag(self, service: BookmarkService):
+        service.add_bookmark(url="https://example.com", title="Example", tags=["python"])
+        service.add_bookmark(url="https://other.com", title="Other", tags=["java"])
+        results = service.list_bookmarks(tag="python")
+        assert len(results) == 1
+        assert results[0].url == "https://example.com"
+
+    def test_list_with_limit(self, service: BookmarkService):
+        for i in range(5):
+            service.add_bookmark(url=f"https://example{i}.com", title=f"Example {i}")
+        results = service.list_bookmarks(limit=3)
+        assert len(results) == 3
+
+
+class TestServiceSearchBookmarks:
+    def test_search_finds_by_url(self, service: BookmarkService):
+        service.add_bookmark(url="https://python.org", title="Python")
+        results = service.search_bookmarks("python")
+        assert len(results) >= 1
+
+    def test_search_empty_returns_empty(self, service: BookmarkService):
+        results = service.search_bookmarks("zzznomatch")
+        assert results == []
+
+
+class TestServiceGetTags:
+    def test_get_tags_empty(self, service: BookmarkService):
+        tags = service.get_tags()
         assert tags == []
 
-    def test_list_tags_returns_counts(self, service: BookmarkService):
-        service.add(url="https://a.com", title="A", tags=["python"])
-        service.add(url="https://b.com", title="B", tags=["python", "dev"])
-        tags = service.list_tags()
-        names = [t.name for t in tags]
-        assert "python" in names
-        assert "dev" in names
+    def test_get_tags_returns_used_tags(self, service: BookmarkService):
+        service.add_bookmark(url="https://example.com", title="Example", tags=["python", "web"])
+        tags = service.get_tags()
+        tag_names = [t.name for t in tags]
+        assert "python" in tag_names
+        assert "web" in tag_names
