@@ -1,1 +1,1 @@
-"""Test package for CLI Bookmark Manager."""
+"""Test package for bookmark_manager."""
