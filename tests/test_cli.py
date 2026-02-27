@@ -1,140 +1,117 @@
-"""Tests for bookmark_manager/cli.py Click commands."""
+"""Integration tests for the CLI commands."""
+
 import pytest
+from pathlib import Path
 from click.testing import CliRunner
 
 from bookmark_manager.cli import cli
 
 
-@pytest.fixture
-def runner(tmp_db_path, monkeypatch):
-    """Create a CliRunner with a temp database path."""
-    monkeypatch.setenv("BOOKMARK_DB_PATH", tmp_db_path)
-    return CliRunner()
+def make_args(tmp_db_path: Path, *args):
+    """Prepend --db flag to CLI args."""
+    return ["--db", str(tmp_db_path)] + list(args)
 
 
-class TestCLIAdd:
-    """Tests for the 'add' command."""
-
-    def test_add_bookmark(self, runner):
-        result = runner.invoke(cli, ["add", "https://example.com", "--title", "Example"])
+class TestAddCommand:
+    def test_add_basic(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "add", "https://example.com"))
         assert result.exit_code == 0
-        assert "example.com" in result.output.lower() or "added" in result.output.lower()
+        assert "added" in result.output.lower()
 
-    def test_add_bookmark_with_tags(self, runner):
+    def test_add_with_title_and_tags(self, runner: CliRunner, tmp_db_path: Path):
         result = runner.invoke(
-            cli, ["add", "https://example.com", "--title", "Example", "--tags", "python,web"]
+            cli,
+            make_args(tmp_db_path, "add", "https://python.org", "--title", "Python", "--tags", "python,dev"),
         )
         assert result.exit_code == 0
+        assert "added" in result.output.lower()
 
-    def test_add_duplicate_shows_error(self, runner):
-        runner.invoke(cli, ["add", "https://dup.com", "--title", "First"])
-        result = runner.invoke(cli, ["add", "https://dup.com", "--title", "Second"])
-        # Should indicate duplicate/error
-        assert result.exit_code != 0 or "already" in result.output.lower() or "duplicate" in result.output.lower() or "error" in result.output.lower()
+    def test_add_duplicate_fails(self, runner: CliRunner, tmp_db_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://example.com"))
+        result = runner.invoke(cli, make_args(tmp_db_path, "add", "https://example.com"))
+        assert result.exit_code != 0
 
-    def test_add_invalid_url_shows_error(self, runner):
-        result = runner.invoke(cli, ["add", "", "--title", "Empty"])
-        assert result.exit_code != 0 or "error" in result.output.lower() or "invalid" in result.output.lower()
+    def test_add_invalid_url_fails(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "add", "not-a-valid-url-!!!"))
+        assert result.exit_code != 0
 
 
-class TestCLIList:
-    """Tests for the 'list' command."""
-
-    def test_list_empty(self, runner):
-        result = runner.invoke(cli, ["list"])
+class TestListCommand:
+    def test_list_empty(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "list"))
         assert result.exit_code == 0
+        assert "no bookmarks" in result.output.lower()
 
-    def test_list_with_bookmarks(self, runner):
-        runner.invoke(cli, ["add", "https://example.com", "--title", "Example"])
-        result = runner.invoke(cli, ["list"])
+    def test_list_shows_bookmarks(self, runner: CliRunner, tmp_db_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://example.com", "--title", "Ex"))
+        result = runner.invoke(cli, make_args(tmp_db_path, "list"))
         assert result.exit_code == 0
-        assert "example.com" in result.output.lower()
+        assert "example.com" in result.output
 
-    def test_list_with_limit(self, runner):
-        runner.invoke(cli, ["add", "https://a.com", "--title", "A"])
-        runner.invoke(cli, ["add", "https://b.com", "--title", "B"])
-        runner.invoke(cli, ["add", "https://c.com", "--title", "C"])
-        result = runner.invoke(cli, ["list", "--limit", "2"])
+    def test_list_filter_by_tag(self, runner: CliRunner, tmp_db_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://python.org", "--tags", "python"))
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://github.com", "--tags", "git"))
+        result = runner.invoke(cli, make_args(tmp_db_path, "list", "--tag", "python"))
         assert result.exit_code == 0
+        assert "python.org" in result.output
+        assert "github.com" not in result.output
 
-    def test_list_with_tag_filter(self, runner):
-        runner.invoke(cli, ["add", "https://py.com", "--title", "Python", "--tags", "python"])
-        runner.invoke(cli, ["add", "https://js.com", "--title", "JS", "--tags", "javascript"])
-        result = runner.invoke(cli, ["list", "--tag", "python"])
+
+class TestSearchCommand:
+    def test_search_finds_match(self, runner: CliRunner, tmp_db_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://python.org", "--title", "Python"))
+        result = runner.invoke(cli, make_args(tmp_db_path, "search", "python"))
         assert result.exit_code == 0
+        assert "python" in result.output.lower()
 
-
-class TestCLISearch:
-    """Tests for the 'search' command."""
-
-    def test_search_by_tag(self, runner):
-        runner.invoke(cli, ["add", "https://py.com", "--title", "Python", "--tags", "python"])
-        result = runner.invoke(cli, ["search", "python"])
+    def test_search_no_results(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "search", "xyznotfound"))
         assert result.exit_code == 0
+        assert "no results" in result.output.lower()
 
-    def test_search_no_results(self, runner):
-        result = runner.invoke(cli, ["search", "nonexistent"])
+
+class TestDeleteCommand:
+    def test_delete_existing(self, runner: CliRunner, tmp_db_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://example.com"))
+        # Get the ID from list
+        list_result = runner.invoke(cli, make_args(tmp_db_path, "list"))
+        # Delete with --yes to skip confirmation
+        result = runner.invoke(cli, make_args(tmp_db_path, "delete", "1", "--yes"))
         assert result.exit_code == 0
+        assert "deleted" in result.output.lower()
+
+    def test_delete_nonexistent(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "delete", "99999", "--yes"))
+        assert result.exit_code != 0
 
 
-class TestCLIDelete:
-    """Tests for the 'delete' command."""
-
-    def test_delete_bookmark(self, runner):
-        runner.invoke(cli, ["add", "https://delete.com", "--title", "Delete"])
-        # Get the ID from list output
-        list_result = runner.invoke(cli, ["list"])
-        # Try deleting with ID 1 (first bookmark)
-        result = runner.invoke(cli, ["delete", "1"], input="y\n")
+class TestTagsCommand:
+    def test_tags_empty(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "tags"))
         assert result.exit_code == 0
+        assert "no tags" in result.output.lower()
 
-    def test_delete_nonexistent(self, runner):
-        result = runner.invoke(cli, ["delete", "99999"], input="y\n")
-        assert result.exit_code != 0 or "not found" in result.output.lower() or "error" in result.output.lower()
-
-
-class TestCLITags:
-    """Tests for the 'tags' command."""
-
-    def test_tags_empty(self, runner):
-        result = runner.invoke(cli, ["tags"])
+    def test_tags_shows_counts(self, runner: CliRunner, tmp_db_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://a.com", "--tags", "python"))
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://b.com", "--tags", "python,dev"))
+        result = runner.invoke(cli, make_args(tmp_db_path, "tags"))
         assert result.exit_code == 0
+        assert "python" in result.output
 
-    def test_tags_with_data(self, runner):
-        runner.invoke(cli, ["add", "https://a.com", "--title", "A", "--tags", "alpha,beta"])
-        result = runner.invoke(cli, ["tags"])
+
+class TestExportImportCommands:
+    def test_export_creates_file(self, runner: CliRunner, tmp_db_path: Path, tmp_path: Path):
+        runner.invoke(cli, make_args(tmp_db_path, "add", "https://example.com", "--title", "Ex"))
+        export_path = str(tmp_path / "exported.html")
+        result = runner.invoke(cli, make_args(tmp_db_path, "export", export_path))
         assert result.exit_code == 0
-        assert "alpha" in result.output.lower() or "beta" in result.output.lower()
+        assert Path(export_path).exists()
 
-
-class TestCLIExport:
-    """Tests for the 'export' command."""
-
-    def test_export_empty_db(self, runner, tmp_path):
-        outfile = str(tmp_path / "export.html")
-        result = runner.invoke(cli, ["export", outfile])
+    def test_import_from_html(self, runner: CliRunner, tmp_db_path: Path, sample_html_file: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "import", str(sample_html_file)))
         assert result.exit_code == 0
+        assert "imported" in result.output.lower()
 
-    def test_export_with_bookmarks(self, runner, tmp_path):
-        runner.invoke(cli, ["add", "https://example.com", "--title", "Example", "--tags", "test"])
-        outfile = str(tmp_path / "export.html")
-        result = runner.invoke(cli, ["export", outfile])
-        assert result.exit_code == 0
-        with open(outfile, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert "example.com" in content.lower()
-
-
-class TestCLIImport:
-    """Tests for the 'import' command."""
-
-    def test_import_html_file(self, runner, html_file):
-        result = runner.invoke(cli, ["import", html_file])
-        assert result.exit_code == 0
-        # Verify bookmarks were imported
-        list_result = runner.invoke(cli, ["list"])
-        assert "python.org" in list_result.output.lower() or "github.com" in list_result.output.lower()
-
-    def test_import_nonexistent_file(self, runner):
-        result = runner.invoke(cli, ["import", "/nonexistent/path.html"])
-        assert result.exit_code != 0 or "error" in result.output.lower() or "not found" in result.output.lower()
+    def test_import_missing_file(self, runner: CliRunner, tmp_db_path: Path):
+        result = runner.invoke(cli, make_args(tmp_db_path, "import", "/nonexistent/path/file.html"))
+        assert result.exit_code != 0

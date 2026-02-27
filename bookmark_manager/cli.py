@@ -1,239 +1,322 @@
-"""CLI entry point for the Bookmark Manager using Click."""
-from __future__ import annotations
+"""CLI interface for the bookmark manager using Click and Rich."""
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
+from rich.console import Console
+from rich.table import Table
+from rich import box
 
-from bookmark_manager.database import DatabaseManager
+from bookmark_manager.config import (
+    DB_PATH,
+    DEFAULT_LIST_LIMIT,
+    TAG_SEPARATOR,
+    STYLE_SUCCESS,
+    STYLE_ERROR,
+    STYLE_WARNING,
+    STYLE_INFO,
+    STYLE_TAG,
+    STYLE_DIM,
+)
+from bookmark_manager.database import Database
+from bookmark_manager.repository import BookmarkRepository
+from bookmark_manager.service import BookmarkService
 from bookmark_manager.exceptions import (
     BookmarkNotFoundError,
     DuplicateBookmarkError,
     InvalidURLError,
-    InvalidTagError,
-    StorageError,
-    ImportError as BmImportError,
-    ExportError,
-)
-from bookmark_manager.service import BookmarkService
-from bookmark_manager.formatters import (
-    print_bookmark_table,
-    print_bookmark_detail,
-    print_tag_table,
-    print_import_result,
-    success,
-    error,
-    info,
+    TagNotFoundError,
+    BookmarkImportError,
+    BookmarkExportError,
+    DatabaseError,
+    BookmarkManagerError,
 )
 
+console = Console()
+err_console = Console(stderr=True)
 
-def get_service() -> BookmarkService:
-    """Initialize database and return a BookmarkService instance."""
-    db_manager = DatabaseManager()
-    db_manager.initialize()
-    return BookmarkService(db_manager)
+
+def get_service(db_path: Path) -> BookmarkService:
+    """Create and return a BookmarkService instance."""
+    db = Database(db_path)
+    repo = BookmarkRepository(db)
+    return BookmarkService(repo)
 
 
 @click.group()
-@click.version_option(package_name="bookmark-manager", prog_name="bookmark-manager")
-def cli() -> None:
-    """A command-line bookmark manager. Store, search, and organize URLs with tags."""
+@click.option(
+    "--db",
+    default=str(DB_PATH),
+    envvar="BOOKMARK_DB",
+    help="Path to SQLite database file.",
+    show_default=True,
+)
+@click.version_option(version="1.0.0", prog_name="bm")
+@click.pass_context
+def cli(ctx: click.Context, db: str) -> None:
+    """CLI Bookmark Manager — store and search URLs with tags."""
+    ctx.ensure_object(dict)
+    ctx.obj["db_path"] = Path(db)
 
 
 @cli.command("add")
 @click.argument("url")
-@click.option("-t", "--tag", "tags", multiple=True, help="Tag to attach (repeatable).")
-@click.option("-T", "--title", default=None, help="Human-readable title for the bookmark.")
-@click.option("-d", "--description", default=None, help="Optional description.")
-def add_bookmark(url: str, tags: tuple[str, ...], title: Optional[str], description: Optional[str]) -> None:
-    """Add a new bookmark for URL."""
+@click.option("--title", "-t", default=None, help="Bookmark title.")
+@click.option(
+    "--tags",
+    "-g",
+    default=None,
+    help="Comma-separated list of tags (e.g. python,dev).",
+)
+@click.option("--description", "-d", default=None, help="Optional description.")
+@click.pass_context
+def add_bookmark(ctx: click.Context, url: str, title: str, tags: str, description: str) -> None:
+    """Add a new bookmark."""
+    tag_list = [t.strip() for t in tags.split(TAG_SEPARATOR) if t.strip()] if tags else []
     try:
-        service = get_service()
+        service = get_service(ctx.obj["db_path"])
         bookmark = service.add_bookmark(
             url=url,
             title=title,
+            tags=tag_list,
             description=description,
-            tags=list(tags),
         )
-        success(f"Bookmark added (id={bookmark.id}): {bookmark.url}")
+        console.print(f"[{STYLE_SUCCESS}]✓ Bookmark added[/{STYLE_SUCCESS}] (id={bookmark.id})")
+        console.print(f"  URL:   [{STYLE_INFO}]{bookmark.url}[/{STYLE_INFO}]")
+        if bookmark.title:
+            console.print(f"  Title: {bookmark.title}")
         if bookmark.tags:
-            info(f"  Tags: {', '.join(bookmark.tags)}")
-    except InvalidURLError as exc:
-        error(f"Invalid URL: {exc}")
+            tags_str = " ".join(f"[{STYLE_TAG}]#{t}[/{STYLE_TAG}]" for t in bookmark.tags)
+            console.print(f"  Tags:  {tags_str}")
+    except DuplicateBookmarkError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Duplicate bookmark:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
-    except InvalidTagError as exc:
-        error(f"Invalid tag: {exc}")
+    except InvalidURLError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Invalid URL:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
-    except DuplicateBookmarkError as exc:
-        error(f"Duplicate bookmark: {exc}")
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
-        sys.exit(1)
-
-
-@cli.command("delete")
-@click.argument("bookmark_id", type=int)
-@click.option("-y", "--yes", is_flag=True, default=False, help="Skip confirmation prompt.")
-def delete_bookmark(bookmark_id: int, yes: bool) -> None:
-    """Delete a bookmark by its ID."""
-    if not yes:
-        confirmed = click.confirm(f"Delete bookmark {bookmark_id}?", default=False)
-        if not confirmed:
-            info("Aborted.")
-            return
-    try:
-        service = get_service()
-        service.delete_bookmark(bookmark_id)
-        success(f"Bookmark {bookmark_id} deleted.")
-    except BookmarkNotFoundError as exc:
-        error(f"Not found: {exc}")
-        sys.exit(1)
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
 
 
 @cli.command("list")
-@click.option("-t", "--tag", "tags", multiple=True, help="Filter by tag (repeatable, AND logic).")
-@click.option("-l", "--limit", default=50, show_default=True, help="Maximum number of results.")
-@click.option("-o", "--offset", default=0, show_default=True, help="Result offset for pagination.")
-def list_bookmarks(tags: tuple[str, ...], limit: int, offset: int) -> None:
-    """List bookmarks, optionally filtered by tags."""
+@click.option("--tag", "-g", default=None, help="Filter by tag.")
+@click.option(
+    "--limit",
+    "-n",
+    default=DEFAULT_LIST_LIMIT,
+    show_default=True,
+    help="Maximum number of results.",
+)
+@click.option("--offset", default=0, help="Pagination offset.", hidden=True)
+@click.pass_context
+def list_bookmarks(ctx: click.Context, tag: str, limit: int, offset: int) -> None:
+    """List bookmarks, optionally filtered by tag."""
     try:
-        service = get_service()
-        if tags:
-            bookmarks = service.get_bookmarks_by_tags(list(tags), limit=limit, offset=offset)
+        service = get_service(ctx.obj["db_path"])
+        if tag:
+            bookmarks = service.get_bookmarks_by_tag(tag, limit=limit, offset=offset)
         else:
             bookmarks = service.list_bookmarks(limit=limit, offset=offset)
+
         if not bookmarks:
-            info("No bookmarks found.")
+            console.print(f"[{STYLE_DIM}]No bookmarks found.[/{STYLE_DIM}]")
             return
-        print_bookmark_table(bookmarks)
-        info(f"\n{len(bookmarks)} bookmark(s) shown.")
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
+
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
+        table.add_column("ID", style="dim", width=6)
+        table.add_column("Title / URL", min_width=40)
+        table.add_column("Tags", style=STYLE_TAG)
+        table.add_column("Added", style="dim", width=12)
+
+        for bm in bookmarks:
+            title_url = f"{bm.title}\n[{STYLE_DIM}]{bm.url}[/{STYLE_DIM}]" if bm.title else bm.url
+            tags_str = ", ".join(bm.tags) if bm.tags else ""
+            added = bm.created_at.strftime("%Y-%m-%d") if bm.created_at else ""
+            table.add_row(str(bm.id), title_url, tags_str, added)
+
+        console.print(table)
+        console.print(f"[{STYLE_DIM}]{len(bookmarks)} bookmark(s) shown.[/{STYLE_DIM}]")
+    except TagNotFoundError as e:
+        err_console.print(f"[{STYLE_WARNING}]⚠ Tag not found:[/{STYLE_WARNING}] {e}")
+        sys.exit(1)
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
 
 
 @cli.command("search")
 @click.argument("query")
-@click.option("-l", "--limit", default=50, show_default=True, help="Maximum number of results.")
-def search_bookmarks(query: str, limit: int) -> None:
-    """Search bookmarks by keyword (matches URL, title, description)."""
+@click.option(
+    "--limit",
+    "-n",
+    default=DEFAULT_LIST_LIMIT,
+    show_default=True,
+    help="Maximum number of results.",
+)
+@click.pass_context
+def search_bookmarks(ctx: click.Context, query: str, limit: int) -> None:
+    """Search bookmarks by URL, title, or description."""
     try:
-        service = get_service()
+        service = get_service(ctx.obj["db_path"])
         bookmarks = service.search_bookmarks(query, limit=limit)
+
         if not bookmarks:
-            info(f"No bookmarks matching '{query}'.")
+            console.print(f"[{STYLE_DIM}]No results for '{query}'.[/{STYLE_DIM}]")
             return
-        print_bookmark_table(bookmarks)
-        info(f"\n{len(bookmarks)} bookmark(s) found.")
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
+
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
+        table.add_column("ID", style="dim", width=6)
+        table.add_column("Title / URL", min_width=40)
+        table.add_column("Tags", style=STYLE_TAG)
+
+        for bm in bookmarks:
+            title_url = f"{bm.title}\n[{STYLE_DIM}]{bm.url}[/{STYLE_DIM}]" if bm.title else bm.url
+            tags_str = ", ".join(bm.tags) if bm.tags else ""
+            table.add_row(str(bm.id), title_url, tags_str)
+
+        console.print(table)
+        console.print(f"[{STYLE_DIM}]{len(bookmarks)} result(s) for '{query}'.[/{STYLE_DIM}]")
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
 
 
-@cli.command("show")
+@cli.command("delete")
 @click.argument("bookmark_id", type=int)
-def show_bookmark(bookmark_id: int) -> None:
-    """Show full details of a single bookmark."""
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+@click.pass_context
+def delete_bookmark(ctx: click.Context, bookmark_id: int, yes: bool) -> None:
+    """Delete a bookmark by ID."""
     try:
-        service = get_service()
-        bookmark = service.get_bookmark(bookmark_id)
-        print_bookmark_detail(bookmark)
-    except BookmarkNotFoundError as exc:
-        error(f"Not found: {exc}")
+        if not yes:
+            click.confirm(f"Delete bookmark {bookmark_id}?", abort=True)
+        service = get_service(ctx.obj["db_path"])
+        service.delete_bookmark(bookmark_id)
+        console.print(f"[{STYLE_SUCCESS}]✓ Bookmark {bookmark_id} deleted.[/{STYLE_SUCCESS}]")
+    except click.exceptions.Abort:
+        console.print(f"[{STYLE_DIM}]Aborted.[/{STYLE_DIM}]")
+    except BookmarkNotFoundError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Not found:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
 
 
 @cli.command("tags")
-@click.option("-l", "--limit", default=100, show_default=True, help="Maximum number of tags to show.")
-def list_tags(limit: int) -> None:
-    """List all tags with their bookmark counts."""
+@click.option(
+    "--limit",
+    "-n",
+    default=50,
+    show_default=True,
+    help="Maximum number of tags to show.",
+)
+@click.pass_context
+def list_tags(ctx: click.Context, limit: int) -> None:
+    """List all tags with bookmark counts."""
     try:
-        service = get_service()
+        service = get_service(ctx.obj["db_path"])
         tag_counts = service.list_tags(limit=limit)
+
         if not tag_counts:
-            info("No tags found.")
+            console.print(f"[{STYLE_DIM}]No tags found.[/{STYLE_DIM}]")
             return
-        print_tag_table(tag_counts)
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
+
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
+        table.add_column("Tag", style=STYLE_TAG)
+        table.add_column("Count", justify="right")
+
+        for tc in tag_counts:
+            table.add_row(tc.tag, str(tc.count))
+
+        console.print(table)
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
 
 
-@cli.command("import-html")
-@click.argument("filepath", type=click.Path(exists=True, readable=True, path_type=Path))
-@click.option("--skip-duplicates", is_flag=True, default=True, show_default=True,
-              help="Silently skip duplicate URLs instead of failing.")
-def import_html(filepath: Path, skip_duplicates: bool) -> None:
-    """Import bookmarks from a browser-exported HTML file."""
+@cli.command("export")
+@click.argument("filepath")
+@click.pass_context
+def export_bookmarks(ctx: click.Context, filepath: str) -> None:
+    """Export all bookmarks to a Netscape HTML file."""
     try:
-        service = get_service()
-        result = service.import_from_html(filepath, skip_duplicates=skip_duplicates)
-        print_import_result(result, filepath)
-    except BmImportError as exc:
-        error(f"Import failed: {exc}")
-        sys.exit(1)
-    except StorageError as exc:
-        error(f"Storage error during import: {exc}")
-        sys.exit(1)
-
-
-@cli.command("export-html")
-@click.argument("filepath", type=click.Path(writable=True, path_type=Path))
-@click.option("-t", "--tag", "tags", multiple=True, help="Export only bookmarks with these tags.")
-def export_html(filepath: Path, tags: tuple[str, ...]) -> None:
-    """Export bookmarks to a browser-compatible HTML file."""
-    try:
-        service = get_service()
-        count = service.export_to_html(filepath, tags=list(tags) if tags else None)
-        success(f"Exported {count} bookmark(s) to {filepath}")
-    except ExportError as exc:
-        error(f"Export failed: {exc}")
-        sys.exit(1)
-    except StorageError as exc:
-        error(f"Storage error during export: {exc}")
-        sys.exit(1)
-
-
-@cli.command("update")
-@click.argument("bookmark_id", type=int)
-@click.option("-T", "--title", default=None, help="New title.")
-@click.option("-d", "--description", default=None, help="New description.")
-@click.option("-t", "--tag", "tags", multiple=True, help="Replace all tags with these (repeatable).")
-def update_bookmark(
-    bookmark_id: int,
-    title: Optional[str],
-    description: Optional[str],
-    tags: tuple[str, ...],
-) -> None:
-    """Update title, description, or tags of an existing bookmark."""
-    if not title and not description and not tags:
-        error("Provide at least one of --title, --description, or --tag to update.")
-        sys.exit(1)
-    try:
-        service = get_service()
-        bookmark = service.update_bookmark(
-            bookmark_id=bookmark_id,
-            title=title,
-            description=description,
-            tags=list(tags) if tags else None,
+        service = get_service(ctx.obj["db_path"])
+        count = service.export_bookmarks(Path(filepath))
+        console.print(
+            f"[{STYLE_SUCCESS}]✓ Exported {count} bookmark(s)[/{STYLE_SUCCESS}] to {filepath}"
         )
-        success(f"Bookmark {bookmark_id} updated.")
-        print_bookmark_detail(bookmark)
-    except BookmarkNotFoundError as exc:
-        error(f"Not found: {exc}")
+    except BookmarkExportError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Export failed:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
-    except InvalidTagError as exc:
-        error(f"Invalid tag: {exc}")
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
-    except StorageError as exc:
-        error(f"Storage error: {exc}")
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
         sys.exit(1)
+
+
+@cli.command("import")
+@click.argument("filepath")
+@click.option(
+    "--skip-duplicates",
+    is_flag=True,
+    default=True,
+    show_default=True,
+    help="Skip duplicate URLs instead of failing.",
+)
+@click.pass_context
+def import_bookmarks(ctx: click.Context, filepath: str, skip_duplicates: bool) -> None:
+    """Import bookmarks from a Netscape HTML file."""
+    try:
+        service = get_service(ctx.obj["db_path"])
+        result = service.import_bookmarks(Path(filepath), skip_duplicates=skip_duplicates)
+        console.print(
+            f"[{STYLE_SUCCESS}]✓ Import complete:[/{STYLE_SUCCESS}] "
+            f"{result.imported} imported, "
+            f"[{STYLE_WARNING}]{result.skipped} skipped[/{STYLE_WARNING}], "
+            f"[{STYLE_ERROR}]{result.failed} failed[/{STYLE_ERROR}]."
+        )
+        if result.errors:
+            for err in result.errors[:5]:
+                err_console.print(f"  [{STYLE_DIM}]↳ {err}[/{STYLE_DIM}]")
+            if len(result.errors) > 5:
+                err_console.print(
+                    f"  [{STYLE_DIM}]... and {len(result.errors) - 5} more errors.[/{STYLE_DIM}]"
+                )
+    except BookmarkImportError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Import failed:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+    except FileNotFoundError:
+        err_console.print(
+            f"[{STYLE_ERROR}]✗ File not found:[/{STYLE_ERROR}] '{filepath}'"
+        )
+        sys.exit(1)
+    except DatabaseError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Database error:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+    except BookmarkManagerError as e:
+        err_console.print(f"[{STYLE_ERROR}]✗ Error:[/{STYLE_ERROR}] {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()

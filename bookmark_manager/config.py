@@ -1,76 +1,52 @@
-"""Configuration constants for the CLI Bookmark Manager."""
+"""Configuration constants for the bookmark manager."""
 
-from __future__ import annotations
-
-import os
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Database paths
-# ---------------------------------------------------------------------------
+# Application metadata
+APP_NAME = "bookmark_manager"
+APP_VERSION = "1.0.0"
 
-#: Default directory for application data (respects XDG_DATA_HOME on Linux)
-_XDG_DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+# Database configuration
+# Uses user's home directory — no hardcoded absolute paths
+DEFAULT_DB_DIR = Path.home() / ".bookmark_manager"
+DEFAULT_DB_NAME = "bookmarks.db"
+DB_PATH = DEFAULT_DB_DIR / DEFAULT_DB_NAME
 
-#: Application data directory
-APP_DATA_DIR: Path = _XDG_DATA_HOME / "bookmark_manager"
+# URL validation
+VALID_SCHEMES = {"http", "https", "ftp", "ftps"}
+DEFAULT_SCHEME = "https"
+MAX_URL_LENGTH = 2048
+MAX_TITLE_LENGTH = 500
+MAX_DESCRIPTION_LENGTH = 2000
 
-#: Default SQLite database file path
-DEFAULT_DB_PATH: Path = APP_DATA_DIR / "bookmarks.db"
+# Tag configuration
+MAX_TAG_LENGTH = 50
+MAX_TAGS_PER_BOOKMARK = 20
+TAG_SEPARATOR = ","
 
-#: Environment variable to override the database path
-DB_PATH_ENV_VAR: str = "BOOKMARK_MANAGER_DB"
+# Search/list configuration
+DEFAULT_LIST_LIMIT = 50
+MAX_LIST_LIMIT = 1000
 
-# ---------------------------------------------------------------------------
-# SQL schema file
-# ---------------------------------------------------------------------------
+# Import/export configuration
+NETSCAPE_HEADER = """<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<!-- This is an automatically generated file.
+     It will be read and overwritten.
+     DO NOT EDIT! -->
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
+"""
 
-#: Path to the bundled SQL schema file
-SCHEMA_FILE: Path = Path(__file__).parent.parent / "schemas" / "database.sql"
+SUPPORTED_IMPORT_FORMATS = [".html", ".htm"]
+SUPPORTED_EXPORT_FORMATS = [".html", ".htm"]
 
-# ---------------------------------------------------------------------------
-# URL normalization
-# ---------------------------------------------------------------------------
-
-#: Default scheme to add when a URL has no scheme
-DEFAULT_SCHEME: str = "https"
-
-#: Accepted URL schemes
-ACCEPTED_SCHEMES: frozenset[str] = frozenset({"http", "https", "ftp", "ftps"})
-
-# ---------------------------------------------------------------------------
-# Listing / pagination
-# ---------------------------------------------------------------------------
-
-#: Default maximum number of bookmarks returned by list operations
-DEFAULT_LIST_LIMIT: int = 50
-
-#: Maximum allowed limit for list operations
-MAX_LIST_LIMIT: int = 1000
-
-# ---------------------------------------------------------------------------
-# Tag constraints
-# ---------------------------------------------------------------------------
-
-#: Maximum length of a tag name
-MAX_TAG_LENGTH: int = 64
-
-#: Maximum number of tags per bookmark
-MAX_TAGS_PER_BOOKMARK: int = 20
-
-# ---------------------------------------------------------------------------
-# Title constraints
-# ---------------------------------------------------------------------------
-
-#: Maximum length of a bookmark title
-MAX_TITLE_LENGTH: int = 500
-
-#: Maximum length of a bookmark description
-MAX_DESCRIPTION_LENGTH: int = 2000
-
-# ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
-
-#: Default export filename
-DEFAULT_EXPORT_FILENAME: str = "bookmarks_export.html"
+# Rich console styling
+STYLE_SUCCESS = "green"
+STYLE_ERROR = "red"
+STYLE_WARNING = "yellow"
+STYLE_INFO = "cyan"
+STYLE_URL = "blue underline"
+STYLE_TAG = "magenta"
+STYLE_TITLE = "bold"
+STYLE_DIM = "dim"
